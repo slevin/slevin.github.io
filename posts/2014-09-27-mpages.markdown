@@ -2,8 +2,20 @@
 title: Mpages
 ---
 
-This is a page about mpages. Not sure if there is a limit to the typing
-width there isn't so I have to manually do it or put in the page break mode.
+This is my first Emacs Lisp project. I came at it with some familiarity with
+lisp in general so I can't address total beginner questions, but I think a lot
+of it can answer by example some of the key areas someone will need to address
+when writing an Emacs Lisp package.
+
+The entire source code to my package is below with interspersed comments. I hope
+that by including it all for a short package you can get the key parts of what
+makes it all work. Please let me know if something doesn't make sense.
+
+The first part appearing in what seems to be a well formatted comment block is
+boilerplate comment formatting for an Elisp package. A good majority of elisp
+packages are formatted exactly the same way. The best way to do it is just copy
+what has already been done and replace with your details. Even the number of
+semicolons on each line matters, so don't get too creative.
 
 ``` elisp
 ;;; mpages.el --- An Emacs buffer for quickly writing your Morning Pages
@@ -43,11 +55,45 @@ width there isn't so I have to manually do it or put in the page break mode.
 
 ;;; Code:
 
+```
+
+The first section of code is for setting up customizable variables related to
+this package. For many settings in Emacs, a user can type `M-x customize` and
+navigate a series of menus to set properties on how different modes and packages
+work.
+
+First you need to set up a group under which your settings will fall under in the menu
+hierarchy. My group is called "mpages". The `:group` parameter defines which group
+your group will show up under. I wanted to fall under the "Text" group. It took me
+awhile to figure out, but that group is defined as "wp" which I assume stands for
+word processing, even though it appears as "Text" in the menus.
+
+``` elisp
 (defgroup mpages nil
   "Mpages helps with writing a daily Morning Pages style diary."
   :prefix "mpages-"
   :group 'wp)
 
+```
+
+I have three variables I want to be customizable. The first is the number of words
+required in order to be considered a complete diary for the day. It's just the number
+of words I check against to highlight the wordcount green in the header bar. 750 is a
+reasonable estimate of 3 pages.
+
+The second variable I define is how frequently emacs does a wordcount. The default is once
+every second. I initially had it check after every character but I noticed a slight delay
+when typing. It was minor but enough to feel wrong. So instead I start a timer that checks
+this number of seconds. In practice every second was just fine.
+
+The last variable defines where to put the diary files. Each day when running this package
+it creates a new file with a name matching the date. It needs a place to put those files.
+I use the type "directory" to force emacs to make sure its a proper directory. I also give it
+a default value of nil which I check against when the app runs. If its nil, then the package
+will interactively request from the user the directory they want to put their diary files in.
+Once set it won't ask again.
+
+``` elisp
 (defcustom mpages-word-threshold 750
   "This threshold is the number of words required before daily diary is complete."
   :type 'integer
@@ -64,9 +110,37 @@ Increasing this number may improve performance."
   :type 'directory
   :group 'mpages)
 
+```
+
+This is where the functionality of the package begins.
+
+You'll notice that every variable and function begins with "mpages-".
+This is good form in elisp land because everything lives in a single
+namespace. By prefixing everything, you can prevent name clashes. Its more
+than just a good idea, the maintainers of the package libraries require it.
+
+First I predefine some package global variables using defvar. All variables
+are global by default in elisp, but by making them explicit you can avoid
+warnings from the flycheck checker.
+
+``` elisp
 (defvar mpages-start-time)
 (defvar mpages-count-timer)
+```
 
+This simple function takes the number of words and the word threshold and formats
+the word count to be either red or green depending of if its more or less. I could
+have accessed the threshold variable directly but I did my best to make most methods
+take as parameters all the data needed. Its easy to be lazy here, but since we are
+writing in lisp, trying to be idempotent is a healthy ideal.
+
+The "parameterize" function takes a string and adds extra data to make it format in
+a specific way when shown in emacs.
+
+"mpages-word-count-string" uses the preceding function to generate text to show in
+the header.
+
+``` elisp
 (defun mpages-formatted-count (num threshold)
   "Colorize the NUM based on being above/below THRESHOLD."
   (let ((numstr (number-to-string num)))
@@ -82,6 +156,22 @@ Increasing this number may improve performance."
           "Time Elapsed: "
           (mpages-tfmt time-elapsed)))
 
+```
+
+"mpages-timer-tick" is the function that gets called every n seconds by the timer
+created when the package starts up. It first checks if "mpages-count-timer" exists.
+This variable is a buffer local variable that gets created later on down below when
+the "mpages" function is called. By checking if this variable is defined, we avoid
+running this function when we are in other buffers. The timers in emacs lisp are global
+and are constantly firing regardless of where the focus is. But we don't want the firing
+of this timer to start off a word count and create a formatted header unless we are in
+an mpages buffer. This check prevents that.
+
+The "mpages-update-word-count" function creates a header bar for the current buffer
+and fills it with the formatted time elapsed and word count text.
+
+
+``` elisp
 (defun mpages-timer-tick ()
   "Run update on header with latest values."
   ;; this check makes sure it only runs update if the timer has been
@@ -94,6 +184,12 @@ Increasing this number may improve performance."
   "Set the generated header line with TIME-ELAPSED and WORD-COUNT."
   (setq header-line-format (mpages-word-count-string time-elapsed word-count)))
 
+```
+
+This function is set up to be called as a hook when the buffer is closed. This
+clears out any local variables, removes the header, and makes things nice again.
+
+``` elisp
 (defun mpages-end-timer-stuff ()
   "Remove all runtime stuff related to this mode."
   (cancel-timer mpages-count-timer)
@@ -101,6 +197,11 @@ Increasing this number may improve performance."
   (makunbound 'mpages-count-timer)
   (makunbound 'mpages-start-time))
 
+```
+
+Some basic time functions
+
+``` elisp
 (defun mpages-tfmt (time)
   "Format the TIME for the header."
   (format-time-string "%M:%S" time))
@@ -109,17 +210,39 @@ Increasing this number may improve performance."
   "Capture the start time of the mode."
   (setq mpages-start-time (current-time)))
 
+```
+
+This is the function that gets called to set up the background timer.
+"run-at-time" is the built in elisp function that handles this. Note the hook that gets
+added which disables the timer when the buffer is closed.
+
+``` elisp
 (defun mpages-setup-timer ()
   "Start periodic timer to update the header with word count and time."
   (setq-local mpages-count-timer (run-at-time nil mpages-update-frequency 'mpages-timer-tick))
   (add-hook 'kill-buffer-hook 'mpages-end-timer-stuff nil t))
 
+```
+
+This function creates a new file for today's diary with a specific file name based on the date. It
+also sets the word wrapping so it doesn't get too wide. That makes it easier to read and I feel like
+makes it feel like typing progress is being made.
+
+``` elisp
 (defun mpages-open-today ()
   "Open a Morning Pages file for today."
   (find-file (concat (file-name-as-directory mpages-content-directory) (format-time-string "%Y%m%d") ".txt"))
   (auto-fill-mode)
   (set-fill-column 80))
 
+```
+
+The main entry point into the package. Notice the first line is `(interactive)`. Adding this line to the first
+line of an emacs function makes it so you can type `M-x mpages` and it will fire off this function. Doing so in
+this case makes sure the user has defined their save directory once. "customize-save-variable" sets that variable
+permanently once they select it. The rest of the steps start off the process.
+
+``` elisp
 ;; open todays file
 (defun mpages ()
   "Entry point to starting mpages."
@@ -130,6 +253,16 @@ Increasing this number may improve performance."
   (mpages-open-today)
   (mpages-setup-time)
   (mpages-setup-timer))
+
+```
+
+Finally I have some left over testing code. Easy to ignore, but I update it when developing to I can
+start functions interactively and make changes.
+
+Lastly the standard provide and ending comment are required when writing emacs lisp packages. Be
+sure to include them in yours.
+
+``` elisp
 
 ;; (defun testy ()
 ;;   "Throwaway function for testing."
